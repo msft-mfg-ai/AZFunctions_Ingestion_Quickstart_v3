@@ -1714,14 +1714,14 @@ def transcribe_audio_video_files(activitypayload: str):
             # Get the path of the temporary file
             local_audio_file = temp_file.name
 
+            # Transcribe the audio file
             try:
                 # Transcribe the audio file
                 transcript = get_transcription(local_audio_file)
             except Exception as e:
                 print(f'Error transcribing {audio_blob_client.blob_name}: {e}')
                 logging.error(f'Error transcribing {audio_blob_client.blob_name}: {e}')
-                pass
-
+                raise
 
             # Create a record for the transcript
             record = {

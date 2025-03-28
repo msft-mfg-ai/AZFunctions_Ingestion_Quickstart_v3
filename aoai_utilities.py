@@ -8,7 +8,9 @@ from openai import AzureOpenAI
 import requests
 import re
 import logging
-
+import math
+from pydub import AudioSegment
+import tempfile
 
 def generate_embeddings(text, model_name=None):
     """
@@ -99,7 +101,7 @@ def convert_media_to_mp3(filename: str):
     return filename
 
 
-def get_transcription(self, filename: str):
+def get_transcription(filename):
     # Store original filename
     original_filename = filename
     files_to_delete = []
@@ -122,7 +124,7 @@ def get_transcription(self, filename: str):
         )
 
         # Convert video to MP3
-        converted_filename = self.convert_video_to_mp3(filename)
+        converted_filename = convert_media_to_mp3(filename)
         if converted_filename != original_filename:
             files_to_delete.append(converted_filename)
 
