@@ -22,3 +22,4 @@ pymupdfb==1.24.0
 pandas==2.0.2
 setuptools==75.6.0
 pikepdf==9.4.2
+pydub==0.25.1

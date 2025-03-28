@@ -57,63 +57,186 @@ def generate_embeddings(text, model_name=None):
     embeddings = response.data[0].embedding
     return embeddings
 
-def get_transcription(filename):
+def convert_media_to_mp3(filename: str):
     """
-    Transcribes the given audio file using the specified transcription model provided by OpenAI.
+    Converts audio/video files to MP3 format for transcription.
 
     Args:
-        filename (str): The path to the audio file to transcribe.
+        filename: Path to the input file
 
-    Returns:
-        transcript (str): The transcription of the audio file.
+     Returns:
+        Path to the MP3 file (either converted or original if not a video)
     """
+    file_path = Path(filename)
+    media_extensions = [".mp4", ".mov", ".avi", ".mkv", ".wav"]
 
-    # Configure OpenAI with Azure settings
-    openai.api_type = "azure"
-    openai.api_base = os.environ['AOAI_WHISPER_ENDPOINT']
-    openai.api_key = os.environ['AOAI_WHISPER_KEY']
-    openai.api_version = "2023-09-01-preview"
-
-    # Specify the model and deployment ID for the transcription
-    model_name = os.environ['AOAI_WHISPER_MODEL_TYPE'] # "whisper-1"
-    deployment_id =  os.environ['AOAI_WHISPER_MODEL']
-
-    # Specify the language of the audio
-    audio_language="en"
-
-    # Initialize an empty string to store the transcript
-    transcript = ''
-
-    # Initialize variable to track if the audio has been transcribed
-    transcribed = False
-
-    client = AzureOpenAI(
-        api_key=os.environ['AOAI_WHISPER_KEY'], azure_endpoint=os.environ['AOAI_WHISPER_ENDPOINT'], api_version="2024-02-01"
-    )
-
-
-    # Attempt to transcribe the audio, retrying on failure
-    while not transcribed:
+    if file_path.suffix.lower() in media_extensions:
+        logging.info(
+            f"Detected video file ({file_path.suffix}). Converting to MP3 format.")
         try:
-            result = client.audio.transcriptions.create(
-                file=open(filename, "rb"),            
-                model=deployment_id
-            )
-            transcript = result.text
-            transcribed = True
-        except Exception as e:  # Catch any exceptions and retry after a delay
-            if 'Maximum content size limit' in str(e):
-                raise e
-            logging.error(e)
-            time.sleep(10)
-            pass
+            # Create a temporary MP3 file for the conversion result
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_wav:
+                mp3_filename = tmp_wav.name
+            # Ensure ffmpeg is correctly set (update the path as needed)
+            # AudioSegment.converter = r"C:\Users\scrutz\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"
+            # Load the video file (pydub will extract the audio track)
+            audio = AudioSegment.from_file(filename)
+            # Reduce audio quality to minimize file size
+            # Convert to mono (1 channel)
+            audio = audio.set_channels(1)
+            # Reduce sample rate to 16kHz (sufficient for speech recognition)
+            audio = audio.set_frame_rate(16000)
+            # Export with reduced quality settings
+            audio.export(mp3_filename, format="mp3", bitrate="32k")
+            logging.info("Conversion to MP3 successful.")
+            # Return the new WAV file
+            return mp3_filename
+        except Exception as e:
+            logging.error(f"Conversion to MP3 failed: {e}")
+            raise Exception("Conversion to MP3 failed")
 
-    # If a transcript was generated, return it
-    if len(transcript)>0:
-        return transcript
+    # Return the original filename if not a video file
+    return filename
 
-    # If no transcript was generated, raise an exception
-    raise Exception("No transcript generated")
+
+def get_transcription(self, filename: str):
+    # Store original filename
+    original_filename = filename
+    files_to_delete = []
+
+    try:
+        # Configure OpenAI with Azure settings
+        openai.api_type = "azure"
+        openai.api_base = os.environ['AOAI_WHISPER_ENDPOINT']
+        openai.api_key = os.environ['AOAI_WHISPER_KEY']
+        openai.api_version = "2023-09-01-preview"
+
+        deployment_id = os.environ['AOAI_WHISPER_MODEL']
+
+        transcript = ''
+
+        client = AzureOpenAI(
+            api_key=os.environ['AOAI_WHISPER_KEY'],
+            azure_endpoint=os.environ['AOAI_WHISPER_ENDPOINT'],
+            api_version="2024-02-01"
+        )
+
+        # Convert video to MP3
+        converted_filename = self.convert_video_to_mp3(filename)
+        if converted_filename != original_filename:
+            files_to_delete.append(converted_filename)
+
+        filename = converted_filename
+
+        # Check the file size
+        file_size = os.path.getsize(filename)
+        max_size = 25 * 1024 * 1024  # 25 MB in bytes
+
+        if file_size > max_size:
+            logging.info(
+                f"File {filename} is {file_size / (1024 * 1024):.2f} MB, exceeding the 20 MB limit. Splitting into chunks.")
+
+            try:
+                # AudioSegment.converter = r"C:\Users\scrutz\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"  # Needed for Windows
+                audio = AudioSegment.from_file(filename)
+            except Exception as e:
+                logging.error(f"Failed to load audio file: {e}")
+                raise Exception(f"Failed to load audio file for chunking: {e}")
+
+            # Preserve original file extension for export (will be '.wav' if converted)
+            file_extension = os.path.splitext(filename)[1]
+
+            # Calculate number of chunks needed (aiming for ~20MB chunks)
+            target_chunk_size = 20 * 1024 * 1024  # 20 MB
+            num_chunks = max(1, math.ceil(file_size / target_chunk_size))
+            chunk_duration = len(audio) / num_chunks
+
+            logging.info(
+                f"Audio duration: {len(audio)/1000:.2f} seconds, splitting into {num_chunks} chunks of {chunk_duration/1000:.2f} seconds each")
+
+            transcript_chunks = []
+
+            for i in range(num_chunks):
+                start_time = int(i * chunk_duration)
+                end_time = int(min(len(audio), (i + 1) * chunk_duration))
+
+                logging.info(
+                    f"Processing chunk {i+1}/{num_chunks}: {start_time/1000:.2f}s to {end_time/1000:.2f}s")
+
+                # Extract the chunk from the audio
+                chunk = audio[start_time:end_time]
+
+                # Save the chunk to a temporary file using the original format
+                with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as temp_file:
+                    temp_filename = temp_file.name
+                    chunk.export(temp_filename, format=file_extension)
+
+                try:
+                    chunk_transcribed = False
+                    while not chunk_transcribed:
+                        try:
+                            with open(temp_filename, "rb") as audio_file:
+                                result = client.audio.transcriptions.create(
+                                    file=audio_file,
+                                    model=deployment_id
+                                )
+                            chunk_transcript = result.text
+                            chunk_transcribed = True
+                            logging.info(
+                                f"Successfully transcribed chunk {i+1}/{num_chunks}")
+                        except Exception as e:
+                            if 'Maximum content size limit' in str(e):
+                                raise e
+                            logging.error(
+                                f"Error transcribing chunk {i+1}/{num_chunks}: {e}")
+                            time.sleep(10)
+                    transcript_chunks.append(chunk_transcript)
+                finally:
+                    # Clean up the temporary chunk file
+                    if os.path.exists(temp_filename):
+                        try:
+                            os.remove(temp_filename)
+                        except Exception as e:
+                            logging.warning(
+                                f"Failed to remove temporary file {temp_filename}: {e}")
+
+            # Combine the transcriptions from each chunk
+            transcript = " ".join(transcript_chunks)
+            logging.info(
+                f"Successfully combined {len(transcript_chunks)} transcript chunks.")
+        else:
+            transcribed = False
+            while not transcribed:
+                try:
+                    with open(filename, "rb") as f:
+                        result = client.audio.transcriptions.create(
+                            file=f, model=deployment_id)
+                    transcript = result.text
+                    transcribed = True
+                except Exception as e:
+                    if 'Maximum content size limit' in str(e):
+                        raise e
+                    logging.error(e)
+                    time.sleep(10)
+
+        if len(transcript) > 0:
+            return transcript
+
+        raise Exception("No transcript generated")
+
+    finally:
+        # Clean up files
+        files_to_delete.append(original_filename)
+
+        # Using set to avoid duplicates
+        for file_to_delete in set(files_to_delete):
+            if os.path.exists(file_to_delete):
+                try:
+                    os.remove(file_to_delete)
+                    logging.info(f"Deleted file: {file_to_delete}")
+                except Exception as e:
+                    logging.warning(
+                        f"Failed to delete file {file_to_delete}: {e}")
 
 def classify_image(b64_image_bytes):
     classification_msg = """
