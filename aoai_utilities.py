@@ -101,7 +101,7 @@ def convert_media_to_mp3(filename: str):
     return filename
 
 
-def get_transcription(filename):
+def get_transcription(filename, max_retries=5):
     # Store original filename
     original_filename = filename
     files_to_delete = []
@@ -175,7 +175,8 @@ def get_transcription(filename):
 
                 try:
                     chunk_transcribed = False
-                    while not chunk_transcribed:
+                    retry_count = 0
+                    while not chunk_transcribed and retry_count < max_retries:
                         try:
                             with open(temp_filename, "rb") as audio_file:
                                 result = client.audio.transcriptions.create(
@@ -189,8 +190,11 @@ def get_transcription(filename):
                         except Exception as e:
                             if 'Maximum content size limit' in str(e):
                                 raise e
+                            retry_count += 1
                             logging.error(
-                                f"Error transcribing chunk {i+1}/{num_chunks}: {e}")
+                                f"Error transcribing chunk {i+1}/{num_chunks}: {e} (Attempt {retry_count}/{max_retries})")
+                            if retry_count >= max_retries:
+                                raise Exception(f"Max retries ({max_retries}) reached while transcribing chunk {i+1}")
                             time.sleep(10)
                     transcript_chunks.append(chunk_transcript)
                 finally:
@@ -208,7 +212,8 @@ def get_transcription(filename):
                 f"Successfully combined {len(transcript_chunks)} transcript chunks.")
         else:
             transcribed = False
-            while not transcribed:
+            retry_count = 0
+            while not transcribed and retry_count < max_retries:
                 try:
                     with open(filename, "rb") as f:
                         result = client.audio.transcriptions.create(
@@ -218,7 +223,10 @@ def get_transcription(filename):
                 except Exception as e:
                     if 'Maximum content size limit' in str(e):
                         raise e
-                    logging.error(e)
+                    retry_count += 1
+                    logging.error(f"Error during transcription: {e} (Attempt {retry_count}/{max_retries})")
+                    if retry_count >= max_retries:
+                        raise Exception(f"Max retries ({max_retries}) reached while transcribing file")
                     time.sleep(10)
 
         if len(transcript) > 0:
@@ -447,4 +455,3 @@ def generate_qna_pair_helper(content):
                 processed = True
                 
     return json.loads(out_str)
-    
